@@ -1,16 +1,23 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect, Suspense } from 'react';
 import { createClient } from '@/lib/supabase/client';
-import { useRouter } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 
-export default function LoginPage() {
-  const router   = useRouter();
-  const supabase = createClient();
+function LoginForm() {
+  const router       = useRouter();
+  const searchParams = useSearchParams();
+  const supabase     = createClient();
   const [email,    setEmail]    = useState('');
   const [password, setPassword] = useState('');
   const [loading,  setLoading]  = useState(false);
   const [error,    setError]    = useState('');
+
+  useEffect(() => {
+    if (searchParams.get('error') === 'auth') {
+      setError('Google sign-in failed. Your account may not have admin access, or the session could not be established.');
+    }
+  }, [searchParams]);
 
   async function handleLogin(e: React.FormEvent) {
     e.preventDefault();
@@ -27,11 +34,19 @@ export default function LoginPage() {
   }
 
   async function handleGoogleSignIn() {
+    setError('');
     setLoading(true);
-    await supabase.auth.signInWithOAuth({
-      provider: 'google',
-      options:  { redirectTo: `${window.location.origin}/auth/callback` },
-    });
+    try {
+      const { error: oauthError } = await supabase.auth.signInWithOAuth({
+        provider: 'google',
+        options:  { redirectTo: `${window.location.origin}/api/auth/callback` },
+      });
+      if (oauthError) { setError(oauthError.message); setLoading(false); }
+      // on success the browser redirects — no further code runs
+    } catch (e: any) {
+      setError(e?.message ?? 'Google sign-in failed');
+      setLoading(false);
+    }
   }
 
   return (
@@ -39,11 +54,20 @@ export default function LoginPage() {
       <div className="w-full max-w-sm">
         {/* Logo */}
         <div className="mb-8 flex flex-col items-center gap-3">
-          <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-blue-600">
-            <svg className="h-6 w-6 text-white" fill="none" stroke="currentColor" strokeWidth={2} viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" d="M12 21a9.004 9.004 0 0 0 8.716-6.747M12 21a9.004 9.004 0 0 1-8.716-6.747M12 21c2.485 0 4.5-4.03 4.5-9S14.485 3 12 3m0 18c-2.485 0-4.5-4.03-4.5-9S9.515 3 12 3m0 0a8.997 8.997 0 0 1 7.843 4.582M12 3a8.997 8.997 0 0 0-7.843 4.582" />
-            </svg>
-          </div>
+          {/* Civil Hero — The Patch mark (reverse variant: ink block, terracotta patch) */}
+          <svg width="48" height="48" viewBox="0 0 48 48" xmlns="http://www.w3.org/2000/svg" aria-label="Civil Hero">
+            <defs>
+              <clipPath id="block">
+                {/* Block: 48×48 rounded square, corner radius 27.5% = 13.2px */}
+                <rect width="48" height="48" rx="13.2" ry="13.2" />
+              </clipPath>
+            </defs>
+            {/* Ink block */}
+            <rect width="48" height="48" rx="13.2" ry="13.2" fill="#1F1F1F" />
+            {/* Terracotta patch: visible radius = 11u = 11×(48/20) = 26.4px, centred at (0,0) */}
+            {/* Seam (1u = 2.4px gap) sits from 26.4 to 28.8px — block colour shows through */}
+            <path d="M 0 0 L 26.4 0 A 26.4 26.4 0 0 1 0 26.4 Z" fill="#BE5A38" clipPath="url(#block)" />
+          </svg>
           <div className="text-center">
             <h1 className="text-lg font-semibold text-white">Civic Hero</h1>
             <p className="text-xs font-mono text-slate-500 uppercase tracking-widest mt-0.5">Operations Console</p>
@@ -122,5 +146,13 @@ export default function LoginPage() {
         </p>
       </div>
     </div>
+  );
+}
+
+export default function LoginPage() {
+  return (
+    <Suspense>
+      <LoginForm />
+    </Suspense>
   );
 }
