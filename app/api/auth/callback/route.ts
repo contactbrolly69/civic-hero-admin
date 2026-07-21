@@ -1,4 +1,4 @@
-import { createServerClient } from '@supabase/ssr';
+import { createServerClient, type CookieOptions } from '@supabase/ssr';
 import { cookies } from 'next/headers';
 import { NextRequest, NextResponse } from 'next/server';
 import { SUPABASE_URL, SUPABASE_ANON_KEY } from '@/lib/supabase/keys';
@@ -10,13 +10,13 @@ export async function GET(request: NextRequest) {
 
   if (code) {
     const cookieStore = await cookies();
-    const pending: Parameters<typeof cookieStore.set>[] = [];
+    const pending: { name: string; value: string; options: CookieOptions }[] = [];
 
     const supabase = createServerClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
       cookies: {
         getAll() { return cookieStore.getAll(); },
-        setAll(cs) {
-          cs.forEach(({ name, value, options }) => pending.push([name, value, options]));
+        setAll(cs: { name: string; value: string; options: CookieOptions }[]) {
+          cs.forEach(c => pending.push(c));
         },
       },
     });
@@ -25,7 +25,9 @@ export async function GET(request: NextRequest) {
 
     if (!error) {
       const response = NextResponse.redirect(`${origin}${next}`);
-      pending.forEach(([name, value, options]) => response.cookies.set(name, value, options));
+      pending.forEach(({ name, value, options }) =>
+        response.cookies.set(name, value, options as Parameters<typeof response.cookies.set>[2]),
+      );
       return response;
     }
 
