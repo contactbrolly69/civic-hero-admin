@@ -30,9 +30,11 @@ export async function middleware(request: NextRequest) {
     return supabaseResponse;
   }
 
-  // Auth routes — redirect to dashboard if already logged in
-  if (path.startsWith('/login')) {
-    if (user) return NextResponse.redirect(new URL('/dashboard', request.url));
+  // Auth / info routes — allow unauthenticated access
+  if (path.startsWith('/login') || path.startsWith('/unauthorized')) {
+    if (user && path.startsWith('/login')) {
+      return NextResponse.redirect(new URL('/dashboard', request.url));
+    }
     return supabaseResponse;
   }
 

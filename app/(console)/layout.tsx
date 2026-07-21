@@ -5,7 +5,7 @@ import { Sidebar } from '@/components/layout/Sidebar';
 
 export default async function ConsoleLayout({ children }: { children: React.ReactNode }) {
   const session = await getSession();
-  if (!session) redirect('/login');
+  if (!session) redirect('/unauthorized');
 
   const stats = await getDashboardStats().catch(() => undefined);
 
