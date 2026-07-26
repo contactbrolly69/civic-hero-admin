@@ -184,7 +184,28 @@ export async function getIssues(filters: IssueFilters = {}): Promise<PaginatedRe
     query = query.eq('severity', filters.severity);
   }
   if (filters.search) {
-    query = query.or(`title.ilike.%${filters.search}%,location.ilike.%${filters.search}%`);
+    const raw  = filters.search.trim();
+    const safe = raw.replace(/%/g, '\\%').replace(/_/g, '\\_');
+    const term = `%${safe}%`;
+
+    // Exact UUID match
+    if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(raw)) {
+      query = query.eq('id', raw);
+    } else {
+      // Reporter lookup (name / handle)
+      const { data: profileMatches } = await db
+        .from('profiles')
+        .select('id')
+        .or(`name.ilike.${term},handle.ilike.${term}`)
+        .limit(100);
+
+      const userIds = (profileMatches ?? []).map((p: { id: string }) => p.id).filter(Boolean);
+
+      let orParts = `title.ilike.${term},description.ilike.${term},location.ilike.${term},category.ilike.${term}`;
+      if (userIds.length > 0) orParts += `,user_id.in.(${userIds.join(',')})`;
+
+      query = query.or(orParts);
+    }
   }
   if (filters.dateFrom) query = query.gte('created_at', filters.dateFrom);
   if (filters.dateTo)   query = query.lte('created_at', filters.dateTo);
