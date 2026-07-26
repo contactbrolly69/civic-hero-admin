@@ -31,7 +31,7 @@ export async function middleware(request: NextRequest) {
   }
 
   // Auth / info routes — allow unauthenticated access
-  if (path.startsWith('/login') || path.startsWith('/unauthorized')) {
+  if (path.startsWith('/login') || path.startsWith('/unauthorized') || path.startsWith('/setup')) {
     if (user && path.startsWith('/login')) {
       return NextResponse.redirect(new URL('/dashboard', request.url));
     }

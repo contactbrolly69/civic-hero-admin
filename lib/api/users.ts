@@ -99,7 +99,20 @@ export async function getUserById(id: string): Promise<ConsoleUser | null> {
 }
 
 export async function checkIsAdmin(userId: string): Promise<boolean> {
-  const db = await createServiceClient();
-  const { data } = await db.from('admins').select('user_id').eq('user_id', userId).maybeSingle();
-  return data !== null;
+  try {
+    const db = await createServiceClient();
+    const { data, error } = await db.from('admins').select('user_id').eq('user_id', userId).maybeSingle();
+    if (error) {
+      console.error('[checkIsAdmin] query failed — likely wrong SERVICE_ROLE_KEY or missing admins row | error:', error.message, '| userId:', userId);
+      return false;
+    }
+    const result = data !== null;
+    if (!result) {
+      console.warn('[checkIsAdmin] user not in admins table | userId:', userId);
+    }
+    return result;
+  } catch (e: any) {
+    console.error('[checkIsAdmin] unexpected error:', e?.message, '| userId:', userId);
+    return false;
+  }
 }
