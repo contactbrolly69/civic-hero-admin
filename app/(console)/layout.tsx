@@ -1,7 +1,8 @@
-import { redirect } from 'next/navigation';
-import { getSession } from '@/lib/api/auth';
+import { redirect }          from 'next/navigation';
+import { getSession }        from '@/lib/api/auth';
 import { getDashboardStats } from '@/lib/api/moderation';
-import { Sidebar } from '@/components/layout/Sidebar';
+import { Sidebar }           from '@/components/layout/Sidebar';
+import { RealtimeProvider }  from '@/components/realtime/RealtimeContext';
 
 export default async function ConsoleLayout({ children }: { children: React.ReactNode }) {
   const session = await getSession();
@@ -12,9 +13,11 @@ export default async function ConsoleLayout({ children }: { children: React.Reac
   return (
     <div className="min-h-screen bg-console-bg">
       <Sidebar stats={stats} />
-      <div className="pl-64">
-        {children}
-      </div>
+      <RealtimeProvider>
+        <div className="pl-60">
+          {children}
+        </div>
+      </RealtimeProvider>
     </div>
   );
 }

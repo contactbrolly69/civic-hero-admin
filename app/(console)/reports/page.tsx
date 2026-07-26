@@ -1,6 +1,6 @@
 import { redirect } from 'next/navigation';
 
-// Reports is an alias for moderation with all statuses visible
+// Reports redirects to the Issues management page
 export default function ReportsPage() {
-  redirect('/moderation?status=all');
+  redirect('/issues');
 }

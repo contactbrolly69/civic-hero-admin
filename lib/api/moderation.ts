@@ -58,12 +58,14 @@ function rowToModeration(row: Record<string, any>): ConsoleModerationRecord {
   };
 }
 
+// !user_id disambiguates the FK hint — issues has multiple paths to profiles
+// (direct user_id FK and through issue_moderation.reviewed_by), causing PGRST201
 const ISSUE_SELECT = `
   id, title, description, category, severity, status, location, lat, lng,
   affected_count, support_count, hidden, moderation_status, created_at, updated_at, user_id,
   issue_media ( url, type ),
   issue_moderation ( id, status, confidence, reason, flags, ai_model, moderated_at, reviewed_by, reviewed_at, override_reason ),
-  profiles ( id, name, handle, ward, joined_at )
+  profiles!user_id ( id, name, handle, ward, joined_at )
 `;
 
 // ── Dashboard stats ───────────────────────────────────────────────────────

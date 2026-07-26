@@ -1,149 +1,314 @@
 'use client';
 
-import { useState, useEffect } from 'react';
-import { useRouter } from 'next/navigation';
+import { useState, useEffect, useCallback } from 'react';
+import { DiagnosticRow }     from '@/components/setup/DiagnosticRow';
+import { UserCard }          from '@/components/setup/UserCard';
+import { ConfirmationDialog } from '@/components/setup/ConfirmationDialog';
+import { SuccessScreen }     from '@/components/setup/SuccessScreen';
+import type { DiagnosticsPayload, DiagnosticCheck } from '@/app/api/admin/bootstrap/route';
 
-interface Status {
-  authenticated:        boolean;
-  email:                string | null;
-  userId:               string | null;
-  adminCount:           number | null;
-  serviceKeyConfigured: boolean;
-  error:                string | null;
+// ── State machine ────────────────────────────────────────────────────────────
+
+type Phase =
+  | 'loading'       // initial fetch in flight
+  | 'ready'         // diagnostics shown, can maybe bootstrap
+  | 'confirming'    // modal open
+  | 'bootstrapping' // POST in flight
+  | 'success'       // done — SuccessScreen takes over
+  | 'error';        // bootstrap POST failed
+
+// ── Logo ─────────────────────────────────────────────────────────────────────
+
+function PatchLogo() {
+  return (
+    <svg width="36" height="36" viewBox="0 0 48 48" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <rect width="48" height="48" rx="13.2" fill="#1F1F1F" />
+      <path d="M 0 0 L 26.4 0 A 26.4 26.4 0 0 1 0 26.4 Z" fill="#BE5A38" clipPath="url(#clip0)" />
+      <clipPath id="clip0"><rect width="48" height="48" rx="13.2" /></clipPath>
+    </svg>
+  );
 }
 
-export default function SetupPage() {
-  const router = useRouter();
-  const [status,  setStatus]  = useState<Status | null>(null);
-  const [working, setWorking] = useState(false);
-  const [message, setMessage] = useState('');
-  const [msgType, setMsgType] = useState<'success' | 'error'>('success');
+// ── Helpers ──────────────────────────────────────────────────────────────────
 
-  useEffect(() => {
-    fetch('/api/admin/bootstrap')
-      .then(r => r.json())
-      .then(setStatus)
-      .catch(() => setStatus(null));
+function allOk(checks: DiagnosticCheck[]): boolean {
+  return checks.every(c => c.status === 'ok');
+}
+
+function hasErrors(checks: DiagnosticCheck[]): boolean {
+  return checks.some(c => c.status === 'error');
+}
+
+// ── Main page ─────────────────────────────────────────────────────────────────
+
+export default function SetupPage() {
+  const [phase,       setPhase]       = useState<Phase>('loading');
+  const [data,        setData]        = useState<DiagnosticsPayload | null>(null);
+  const [revealed,    setRevealed]    = useState(0);   // how many rows to show
+  const [errorMsg,    setErrorMsg]    = useState('');
+  const [successEmail, setSuccessEmail] = useState('');
+
+  // ── Fetch diagnostics ───────────────────────────────────────────────────────
+
+  const fetchDiagnostics = useCallback(async () => {
+    setPhase('loading');
+    setData(null);
+    setRevealed(0);
+    try {
+      const res  = await fetch('/api/admin/bootstrap');
+      const body = (await res.json()) as DiagnosticsPayload;
+      setData(body);
+      // Stagger reveal
+      body.checks.forEach((_, i) => {
+        setTimeout(() => setRevealed(r => Math.max(r, i + 1)), i * 120 + 200);
+      });
+      setTimeout(() => setPhase('ready'), body.checks.length * 120 + 600);
+    } catch {
+      setPhase('error');
+      setErrorMsg('Failed to contact the diagnostics API. Check the browser console.');
+    }
   }, []);
 
-  async function handleBootstrap() {
-    setWorking(true);
-    setMessage('');
+  useEffect(() => { fetchDiagnostics(); }, [fetchDiagnostics]);
+
+  // ── Bootstrap ───────────────────────────────────────────────────────────────
+
+  async function runBootstrap() {
+    setPhase('bootstrapping');
     try {
       const res  = await fetch('/api/admin/bootstrap', { method: 'POST' });
       const body = await res.json();
-      if (res.ok) {
-        setMsgType('success');
-        setMessage(`Admin account created for ${body.email}. Redirecting…`);
-        setTimeout(() => router.push('/dashboard'), 1500);
-      } else {
-        setMsgType('error');
-        setMessage(body.error ?? 'Unknown error');
+      if (res.status === 409) {
+        setPhase('error');
+        setErrorMsg('Bootstrap already completed — an administrator exists. Reload the page.');
+        return;
       }
+      if (!res.ok || !body.success) {
+        setPhase('error');
+        setErrorMsg(body.error ?? 'Unknown error from bootstrap endpoint');
+        return;
+      }
+      setSuccessEmail(body.email ?? data?.user?.email ?? 'unknown');
+      setPhase('success');
     } catch (e: any) {
-      setMsgType('error');
-      setMessage(e?.message ?? 'Request failed');
-    } finally {
-      setWorking(false);
+      setPhase('error');
+      setErrorMsg(e?.message ?? 'Network error');
     }
   }
 
-  const canBootstrap = status?.authenticated && status?.serviceKeyConfigured && status?.adminCount === 0;
-  const alreadyAdmin = (status?.adminCount ?? 0) > 0;
+  // ── Render: success takeover ─────────────────────────────────────────────
+
+  if (phase === 'success') {
+    return <SuccessScreen email={successEmail} />;
+  }
+
+  // ── Render: main ─────────────────────────────────────────────────────────
+
+  const totalChecks = data?.checks.length ?? 0;
+  const diagDone    = revealed >= totalChecks && totalChecks > 0;
+
+  const canBootstrap  = data?.canBootstrap  ?? false;
+  const alreadyAdmin  = data?.isAlreadyAdmin ?? false;
+  const adminCount    = data?.adminCount    ?? null;
+
+  const overallStatus: 'ok' | 'warn' | 'error' | 'loading' =
+    phase === 'loading'        ? 'loading'
+    : !data                    ? 'error'
+    : hasErrors(data.checks)   ? 'error'
+    : !allOk(data.checks)      ? 'warn'
+    : 'ok';
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-console-bg px-4">
-      <div className="w-full max-w-md space-y-6">
-        <div className="flex flex-col items-center gap-2 text-center">
-          <svg width="40" height="40" viewBox="0 0 48 48" xmlns="http://www.w3.org/2000/svg">
-            <rect width="48" height="48" rx="13.2" fill="#1F1F1F" />
-            <path d="M 0 0 L 26.4 0 A 26.4 26.4 0 0 1 0 26.4 Z" fill="#BE5A38" clipPath="url(#b)" />
-            <clipPath id="b"><rect width="48" height="48" rx="13.2" /></clipPath>
-          </svg>
-          <h1 className="text-lg font-semibold text-white">Admin Setup</h1>
-          <p className="text-xs text-slate-500 font-mono uppercase tracking-widest">One-time bootstrap</p>
+    <div className="flex min-h-screen flex-col items-center bg-console-bg px-4 py-12">
+      {phase === 'confirming' && data?.user && (
+        <ConfirmationDialog
+          email={data.user.email ?? 'Unknown'}
+          onConfirm={runBootstrap}
+          onCancel={() => setPhase('ready')}
+        />
+      )}
+
+      <div className="w-full max-w-xl space-y-6">
+
+        {/* ── Header ───────────────────────────────────────────────────────── */}
+        <div className="flex flex-col items-center gap-3 text-center">
+          <PatchLogo />
+          <div>
+            <h1 className="text-xl font-semibold text-white tracking-tight">
+              Civic Hero Admin Setup
+            </h1>
+            <p className="text-xs text-slate-500 font-mono uppercase tracking-widest mt-1">
+              one-time bootstrap wizard
+            </p>
+          </div>
         </div>
 
-        <div className="rounded-2xl border border-console-border bg-console-surface p-6 space-y-4">
-
-          {/* Diagnostics */}
-          <div className="space-y-2">
-            <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Diagnostics</p>
-            {status === null ? (
-              <p className="text-xs text-slate-500">Loading…</p>
-            ) : (
-              <div className="space-y-1.5 text-xs font-mono">
-                <Row label="Auth session"    ok={status.authenticated} value={status.email ?? 'not signed in'} />
-                <Row label="Service role key" ok={status.serviceKeyConfigured} value={status.serviceKeyConfigured ? 'configured' : 'MISSING'} />
-                <Row label="Admin count"     ok={status.adminCount !== null} value={status.adminCount !== null ? String(status.adminCount) : 'query failed'} />
-                {status.userId && <Row label="Your user ID" ok value={status.userId} mono />}
-                {status.error  && <Row label="DB error"     ok={false} value={status.error} />}
-              </div>
+        {/* ── System status card ───────────────────────────────────────────── */}
+        <div className="rounded-2xl border border-console-border bg-console-surface overflow-hidden">
+          <div className="flex items-center justify-between px-5 py-4 border-b border-slate-800">
+            <div className="flex items-center gap-2.5">
+              <StatusDot status={overallStatus} />
+              <span className="text-sm font-semibold text-slate-200">System diagnostics</span>
+            </div>
+            {phase !== 'loading' && (
+              <button
+                onClick={fetchDiagnostics}
+                className="text-xs text-slate-500 hover:text-slate-300 transition-colors px-2 py-1 rounded border border-slate-700 hover:border-slate-500"
+              >
+                ↻ Refresh
+              </button>
             )}
           </div>
 
-          {/* Action */}
-          {status && (
-            <div className="pt-2 border-t border-slate-800 space-y-3">
-              {!status.authenticated && (
-                <p className="text-xs text-amber-400">
-                  You are not signed in. <a href="/login" className="underline">Sign in first</a>, then return to this page.
-                </p>
-              )}
-              {status.authenticated && !status.serviceKeyConfigured && (
-                <p className="text-xs text-red-400">
-                  <strong>SUPABASE_SERVICE_ROLE_KEY</strong> is not set in the Vercel project environment variables. Add it in
-                  Vercel → Project Settings → Environment Variables, then redeploy.
-                </p>
-              )}
+          <div className="px-5 py-4 space-y-0.5 min-h-[160px]">
+            {phase === 'loading' && !data && (
+              <div className="flex items-center gap-2 py-6 justify-center">
+                <span className="inline-block h-4 w-4 rounded-full border-2 border-slate-700 border-t-slate-400 animate-spin" />
+                <span className="text-xs text-slate-500">Running diagnostics…</span>
+              </div>
+            )}
+
+            {data?.checks.map((check, i) => (
+              <DiagnosticRow
+                key={check.key}
+                check={check}
+                resolved={revealed > i}
+                delayMs={i * 120}
+              />
+            ))}
+          </div>
+        </div>
+
+        {/* ── Current user card ────────────────────────────────────────────── */}
+        {data?.user && (
+          <div className="rounded-2xl border border-console-border bg-console-surface overflow-hidden">
+            <div className="flex items-center gap-2.5 px-5 py-4 border-b border-slate-800">
+              <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Signed-in account</span>
+            </div>
+            <div className="p-5">
+              <UserCard user={data.user} />
+            </div>
+          </div>
+        )}
+
+        {/* ── Bootstrap status card ────────────────────────────────────────── */}
+        {diagDone && data && (
+          <div className="rounded-2xl border border-console-border bg-console-surface overflow-hidden">
+            <div className="flex items-center gap-2.5 px-5 py-4 border-b border-slate-800">
+              <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Bootstrap</span>
+              <span className={`ml-auto rounded-full px-2 py-0.5 text-[10px] font-semibold ${
+                alreadyAdmin  ? 'bg-emerald-500/15 text-emerald-400' :
+                canBootstrap  ? 'bg-amber-500/15 text-amber-400'     :
+                                'bg-red-500/15 text-red-400'
+              }`}>
+                {alreadyAdmin ? 'ACTIVE' : canBootstrap ? 'REQUIRED' : 'UNAVAILABLE'}
+              </span>
+            </div>
+
+            <div className="p-5 space-y-4">
+              {/* Already admin */}
               {alreadyAdmin && (
-                <p className="text-xs text-slate-400">
-                  Admins already exist ({status.adminCount}). Bootstrap is disabled.{' '}
-                  <a href="/dashboard" className="text-blue-400 underline">Try the dashboard →</a>
-                </p>
-              )}
-              {canBootstrap && (
-                <>
-                  <p className="text-xs text-green-400">
-                    Ready to bootstrap. The admins table is empty. Click below to add <strong>{status.email}</strong> as the first admin.
+                <div className="rounded-lg bg-emerald-500/8 border border-emerald-500/20 p-4">
+                  <p className="text-sm text-emerald-300 font-medium mb-1">You are already an administrator</p>
+                  <p className="text-xs text-emerald-400/70">
+                    {adminCount !== null ? `${adminCount} admin account${adminCount !== 1 ? 's' : ''} configured.` : ''}
+                    {' '}Bootstrap is disabled — the admin table is not empty.
                   </p>
-                  <button
-                    onClick={handleBootstrap}
-                    disabled={working}
-                    className="w-full rounded-lg bg-green-700 px-4 py-2.5 text-sm font-semibold text-white hover:bg-green-600 disabled:opacity-50"
+                  <a
+                    href="/dashboard"
+                    className="mt-3 inline-block rounded-lg bg-emerald-700 px-4 py-2 text-xs font-semibold text-white hover:bg-emerald-600 transition-colors"
                   >
-                    {working ? 'Creating admin…' : 'Make me an admin'}
-                  </button>
-                </>
+                    Open dashboard →
+                  </a>
+                </div>
               )}
 
-              {message && (
-                <div className={`rounded-lg border px-3 py-2.5 text-xs ${
-                  msgType === 'success'
-                    ? 'border-green-500/30 bg-green-500/10 text-green-400'
-                    : 'border-red-500/30 bg-red-500/10 text-red-400'
-                }`}>
-                  {message}
+              {/* Admins exist but current user isn't one */}
+              {!alreadyAdmin && (adminCount ?? 0) > 0 && (
+                <div className="rounded-lg bg-slate-800/60 border border-slate-700 p-4">
+                  <p className="text-sm text-slate-300 font-medium mb-1">Bootstrap already completed</p>
+                  <p className="text-xs text-slate-500">
+                    {adminCount} administrator{adminCount !== 1 ? 's' : ''} already exist.
+                    Contact an existing admin to grant you access via the Users tab.
+                  </p>
+                </div>
+              )}
+
+              {/* Ready to bootstrap */}
+              {canBootstrap && (
+                <div className="space-y-3">
+                  <div className="rounded-lg bg-slate-800/40 border border-slate-700 p-4">
+                    <p className="text-xs text-slate-400 leading-relaxed">
+                      All systems go. The admins table is empty. Promoting{' '}
+                      <span className="font-medium text-white">{data.user?.email}</span>{' '}
+                      to administrator will permanently enable console access and lock this wizard.
+                    </p>
+                  </div>
+                  <button
+                    onClick={() => setPhase('confirming')}
+                    disabled={phase === 'bootstrapping'}
+                    className="w-full rounded-xl bg-emerald-700 py-3 text-sm font-semibold text-white hover:bg-emerald-600 disabled:opacity-50 transition-colors"
+                  >
+                    {phase === 'bootstrapping'
+                      ? 'Creating administrator…'
+                      : 'Make me an administrator →'}
+                  </button>
+                </div>
+              )}
+
+              {/* No session */}
+              {!data.user && (
+                <div className="rounded-lg bg-amber-500/8 border border-amber-500/20 p-4">
+                  <p className="text-sm text-amber-300 font-medium mb-1">Sign in first</p>
+                  <p className="text-xs text-amber-400/70 mb-3">
+                    You need an active session to bootstrap. Sign in with the account you want to make administrator.
+                  </p>
+                  <a
+                    href="/login"
+                    className="inline-block rounded-lg bg-amber-700 px-4 py-2 text-xs font-semibold text-white hover:bg-amber-600 transition-colors"
+                  >
+                    Go to login →
+                  </a>
+                </div>
+              )}
+
+              {/* Error state from bootstrap */}
+              {phase === 'error' && errorMsg && (
+                <div className="rounded-lg bg-red-500/8 border border-red-500/20 p-4">
+                  <p className="text-xs font-semibold text-red-300 mb-1">Bootstrap failed</p>
+                  <p className="text-xs text-red-400/80 break-all leading-relaxed">{errorMsg}</p>
+                  <button
+                    onClick={fetchDiagnostics}
+                    className="mt-3 text-xs text-red-400 hover:text-red-300 underline"
+                  >
+                    Re-run diagnostics
+                  </button>
                 </div>
               )}
             </div>
-          )}
-        </div>
+          </div>
+        )}
 
-        <p className="text-center text-xs text-slate-600">
-          This page is only useful when no admins exist. It becomes inert once the first admin is created.
+        {/* ── Footer ───────────────────────────────────────────────────────── */}
+        <p className="text-center text-xs text-slate-700 pb-4">
+          This page is only accessible when no admins exist. It becomes permanently inert after the first administrator is created.
         </p>
       </div>
     </div>
   );
 }
 
-function Row({ label, ok, value, mono }: { label: string; ok: boolean; value: string; mono?: boolean }) {
+// ── Status dot ───────────────────────────────────────────────────────────────
+
+function StatusDot({ status }: { status: 'ok' | 'warn' | 'error' | 'loading' }) {
+  if (status === 'loading') {
+    return <span className="inline-block h-2 w-2 rounded-full bg-slate-600 animate-pulse" />;
+  }
   return (
-    <div className="flex items-start gap-2">
-      <span className={ok ? 'text-green-400' : 'text-red-400'}>{ok ? '✓' : '✗'}</span>
-      <span className="text-slate-500 shrink-0 w-36">{label}</span>
-      <span className={`text-slate-300 break-all ${mono ? 'font-mono text-[10px]' : ''}`}>{value}</span>
-    </div>
+    <span className={`inline-block h-2 w-2 rounded-full ${
+      status === 'ok'   ? 'bg-emerald-400' :
+      status === 'warn' ? 'bg-amber-400'   :
+                          'bg-red-400'
+    }`} />
   );
 }
